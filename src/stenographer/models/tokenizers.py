@@ -5,9 +5,11 @@ import json
 
 import nltk
 from num2words import num2words
-from setuptools.config.pyprojecttoml import load_file
+
 
 _LOG = logging.getLogger(__name__)
+_NUMBERS = set('0123456789')
+_LETTERS = set('abcdefghijklmnopqrstuvwxyz')
 
 
 def _read_json_file(file_path):
@@ -60,8 +62,13 @@ class _Abbreviation(_Transformer):
 
     def transform(self, x):
         # If element is existing then we return its equivalent,
-        # otherwise, we return the same element.
-        return self.abbr_dict.get(x, x)
+        # otherwise, we return keep empty word.
+        x_split = x.split()
+        res = [''] * len(x_split)
+        for idx, word in enumerate(x_split):
+            if word in self.abbr_dict:
+                res[idx] = self.abbr_dict[word]
+        return res
 
 
 class _PuncTokenization(_Transformer):
@@ -75,6 +82,67 @@ class _PuncTokenization(_Transformer):
         assert x is not None, (
             "The text which we want to tokenize is not defined.")
         return nltk.wordpunct_tokenize(x)
+
+
+class _NumberTokenizer(_Transformer):
+    """
+    Separate the numbers from the text, for example:
+    "123ème" is a case which is not handle by the punctuation tokenizer.
+    So we will try to separate some number from the words.
+
+    :param letters:
+        The alphabet of all the letter contained in the language.
+    :param numbers:
+        The alphabet of all the number contained in the language.
+
+    :type letters: `list`
+    :type numbers: `list`
+    """
+    def __init__(self, numbers, letters):
+        super().__init__()
+        self.numbers = numbers
+        self.letters = letters
+
+    @staticmethod
+    def _filters(string, pattern):
+        word_split = re.split(rf"[{''.join(pattern)}]", string)
+        result = list(filter(lambda x: bool(x), word_split))
+        return result
+
+    @staticmethod
+    def _pos_dict(words, string):
+        """
+        Returns mapping between each word
+        and its position in string.
+        """
+        out = {}
+        for w in words:
+            out[w] = string.index(w)
+        return out
+
+    def transform(self, x):
+        assert x is not None, (
+            "The text in which we want to separate the numbers"
+            "from the words is not defined.")
+        x_split = x.split()
+        out = []
+        for word in x_split:
+            number_found = any(map((lambda c: c in self.numbers), word))
+            letter_found = any(map((lambda c: c in self.letters), word))
+            if not (number_found and letter_found):
+                out.append(word)
+                continue
+
+            # We will extract the number and letter from the word:
+            numbers = self._filters(word, self.numbers)
+            letters = self._filters(word, self.letters)
+
+            # Build position dictionaries:
+            # Example: {"123": 0, "ème": 3}
+            numbers_pd = self._pos_dict(numbers, word)
+            letters_pd = self._pos_dict(letters, word)
+            merge_pd = {**numbers_pd, **letters_pd}
+            # TODO: place each word at corresponding position.
 
 
 class _Num2Text(_Transformer):
@@ -149,7 +217,7 @@ class _Prononciation(_Transformer):
         return results
 
 
-class PhoneticTokenizer:
+class PhoneticTokenizer(_Transformer):
     """Phonetic tokenization
 
     :arg phonemes_vocab:
@@ -246,3 +314,13 @@ class PhoneticTokenizer:
         new_instance = cls(phon_vocab, abbreviation, punc_tokenizer,
                            num_transform, expr_transform, word_transform)
         return new_instance
+
+    def encode(self, x):
+        assert x is not None, (
+            "The text value which will be tokenized is not defined.")
+        x = x.lower()
+        x = self.abbr_transform(x)
+
+
+    def transform(self, x):
+        return self.encode(x)
