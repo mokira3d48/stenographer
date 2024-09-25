@@ -4,6 +4,7 @@ import logging
 import json
 
 import nltk
+from joblib.externals.cloudpickle import instance
 from num2words import num2words
 
 
@@ -25,15 +26,13 @@ class _Transformer:
         raise NotImplementedError
 
     def __call__(self, inp):
-        if isinstance(inp, list):
-            out = []
-            for x in inp:
-                res = self.transform(x)
-                out.append(res)
-            return out
-        else:
-            res = self.transform(inp)
-            return res
+        if not isinstance(inp, list):
+            raise TypeError("The input must be a list type.")
+        out = []
+        for x in inp:
+            res = self.transform(x)
+            out.append(res)
+        return out
 
 
 class _Text2Lower(_Transformer):
@@ -68,7 +67,7 @@ class _Abbreviation(_Transformer):
         for idx, word in enumerate(x_split):
             if word in self.abbr_dict:
                 res[idx] = self.abbr_dict[word]
-        return res
+        return ' '.join(res)
 
 
 class _PuncTokenization(_Transformer):
@@ -115,18 +114,25 @@ class _NumberTokenizer(_Transformer):
         Returns mapping between each word
         and its position in string.
         """
-        out = {}
+        indexes = []
+        wdict = {}
         for w in words:
-            out[w] = string.index(w)
-        return out
+            # This sub-word `w` can be found at several places.
+            matches = re.finditer(r'\b' + re.escape(w) + r'\b', string)
+            for match in matches:
+                ind = match.start()
+                indexes.append(ind)
+                wdict[ind] = w
+        out = sorted(indexes)
+        return out, wdict
 
     def transform(self, x):
         assert x is not None, (
             "The text in which we want to separate the numbers"
             "from the words is not defined.")
-        x_split = x.split()
+        # x_split = x.split()
         out = []
-        for word in x_split:
+        for word in x:
             number_found = any(map((lambda c: c in self.numbers), word))
             letter_found = any(map((lambda c: c in self.letters), word))
             if not (number_found and letter_found):
@@ -139,10 +145,15 @@ class _NumberTokenizer(_Transformer):
 
             # Build position dictionaries:
             # Example: {"123": 0, "ème": 3}
-            numbers_pd = self._pos_dict(numbers, word)
-            letters_pd = self._pos_dict(letters, word)
-            merge_pd = {**numbers_pd, **letters_pd}
-            # TODO: place each word at corresponding position.
+            num_pos, num_dict = self._pos_dict(numbers, word)
+            wrd_pos, wrd_dict = self._pos_dict(letters, word)
+            wrd_res = {**num_dict, **wrd_dict}
+            pos_res = num_pos + wrd_pos
+            pos_res = sorted(pos_res)
+            for pos in pos_res:
+                out.append(wrd_res[pos])
+
+        return out
 
 
 class _Num2Text(_Transformer):
@@ -159,7 +170,8 @@ class _Num2Text(_Transformer):
     """
     _PATTERN = r'\b\d+(?:[,.]\d+)?\b'
 
-    def __init__(self, lang='fr', remove_dash=False):
+    def __init__(self, numbers, lang='fr', remove_dash=False):
+        self.numbers = numbers
         self.lang = lang
         self.remove_dash = remove_dash
 
@@ -171,14 +183,15 @@ class _Num2Text(_Transformer):
 
     def transform(self, x):
         assert x is not None, 'The text should not be none.'
-        if not isinstance(x, str):
-            raise TypeError("The type must be a string.")
+        if not isinstance(x, list):
+            raise TypeError("The type must be a list.")
         if not x:
             return ''
-        result = x
-        num_list = re.findall(self._PATTERN, x)
-        for str_num in num_list:
-            num = str_num
+        result = x[:]
+        # num_list = re.findall(self._PATTERN, x)
+        for ind, num in enumerate(x):
+            if not re.findall(rf"[{self.numbers}]", num):
+                continue
             if ',' in num:
                 num = num.replace(',', '.')  # eg: 3.1415 -> 3,1415
             if '.' in num:
@@ -188,13 +201,44 @@ class _Num2Text(_Transformer):
             trans = self.to_text(value)
             if self.remove_dash:
                 trans = trans.replace('-', ' ')
-            result = result.replace(str_num, trans, 1)
+            # result = result.replace(str_num, trans, 1)
+            result[ind] = trans
         return result
 
 
-class _Prononciation(_Transformer):
+class _ExprPrononciation(_Transformer):
     """
-    Transformation of text into prononciation using IPA dictionary.
+    Transformation of expressions into their prononciation
+    using IPA dictionary.
+
+    :param ipa:
+        The IPA dictionary that will be used
+        to transform text into prononciation.
+    :type ipa: `dict`
+    """
+    def __init__(self, ipa):
+        super().__init__()
+        self.ipa = ipa
+
+    def transform(self, x):
+        assert x is not None, (
+            "The text which we want to transform"
+            "into prononciation is not defined.")
+        pron_found = []
+        for expression, prononciation in self.ipa.items():
+            pattern = rf"{expression}"
+            # print(pattern)
+            occurrences_found = re.match(pattern, x)
+            if not occurrences_found:
+                continue
+            x = x.replace(expression, prononciation)
+            pron_found.append(prononciation)
+        return x, pron_found
+
+
+class _WordPrononciation(_Transformer):
+    """
+    Transformation of words into their prononciations using IPA dictionary.
 
     :param ipa:
         The IPA dictionary that will be used
@@ -247,6 +291,7 @@ class PhoneticTokenizer(_Transformer):
             phonemes_vocab,
             abbr_transform,
             punc_tokenizer,
+            num_tokenizer,
             num_transcript,
             expr_transform,
             word_transform,
@@ -254,6 +299,7 @@ class PhoneticTokenizer(_Transformer):
         self.phonemes_vocab = phonemes_vocab
         self.abbr_transform = abbr_transform
         self.punc_tokenizer = punc_tokenizer
+        self.num_tokenizer = num_tokenizer
         self.num_transcript = num_transcript
         self.expr_transform = expr_transform
         self.word_transform = word_transform
@@ -297,30 +343,36 @@ class PhoneticTokenizer(_Transformer):
         # And then, we will load each json file path and instantiate
         # the corresponding transformer class.
         mapping = {abbr_dict:_Abbreviation,
-                   expr_pron_dict: _Prononciation,
-                   word_pron_dict: _Prononciation}
+                   expr_pron_dict: _ExprPrononciation,
+                   word_pron_dict: _WordPrononciation}
         transformer_instances = []
         for file_path, transformer_class in mapping.items():
             dict_loaded = _read_json_file(file_path)
-            instance = transformer_class(file_path)
+            instance = transformer_class(dict_loaded)
             transformer_instances.append(instance)
         abbreviation, expr_transform, word_transform = transformer_instances
 
         # Now, we will instantiate the reste of dependence:
         punc_tokenizer = _PuncTokenization()
-        num_transform = _Num2Text(lang='fr')  # `remove_dash` will be adjusted;
+        num_tokenizer = _NumberTokenizer(list(_NUMBERS), list(_LETTERS))
+        num_transform = _Num2Text(_NUMBERS, lang='fr')
+        # `remove_dash` will be adjusted;
 
         # Instantiate the tokenizer:
         new_instance = cls(phon_vocab, abbreviation, punc_tokenizer,
-                           num_transform, expr_transform, word_transform)
+                           num_tokenizer, num_transform, expr_transform,
+                           word_transform)
         return new_instance
 
     def encode(self, x):
         assert x is not None, (
             "The text value which will be tokenized is not defined.")
         x = x.lower()
-        x = self.abbr_transform(x)
-
+        # x = self.abbr_transform(x)
+        # x = self.punc_tokenizer(x)
+        # x = self.num_tokenizer(x)
+        # x = self.num_transcript(x)
+        _LOG.debug("RESULTS: " + str(x))
 
     def transform(self, x):
         return self.encode(x)
