@@ -67,6 +67,8 @@ class _Abbreviation(_Transformer):
         for idx, word in enumerate(x_split):
             if word in self.abbr_dict:
                 res[idx] = self.abbr_dict[word]
+            else:
+                res[idx] = word
         return ' '.join(res)
 
 
@@ -118,8 +120,9 @@ class _NumberTokenizer(_Transformer):
         wdict = {}
         for w in words:
             # This sub-word `w` can be found at several places.
-            matches = re.finditer(r'\b' + re.escape(w) + r'\b', string)
+            matches = re.finditer(rf'{re.escape(w)}', string)
             for match in matches:
+                # _LOG.debug(str(match.start()))
                 ind = match.start()
                 indexes.append(ind)
                 wdict[ind] = w
@@ -147,11 +150,15 @@ class _NumberTokenizer(_Transformer):
             # Example: {"123": 0, "ème": 3}
             num_pos, num_dict = self._pos_dict(numbers, word)
             wrd_pos, wrd_dict = self._pos_dict(letters, word)
+            # _LOG.debug(str(num_pos))
+            # _LOG.debug(str(num_dict))
             wrd_res = {**num_dict, **wrd_dict}
             pos_res = num_pos + wrd_pos
             pos_res = sorted(pos_res)
             for pos in pos_res:
+                _LOG.debug(str(pos))
                 out.append(wrd_res[pos])
+                _LOG.debug(str(pos) + " " + str(out[-1]))
 
         return out
 
@@ -367,12 +374,16 @@ class PhoneticTokenizer(_Transformer):
     def encode(self, x):
         assert x is not None, (
             "The text value which will be tokenized is not defined.")
-        x = x.lower()
-        # x = self.abbr_transform(x)
-        # x = self.punc_tokenizer(x)
-        # x = self.num_tokenizer(x)
+        x = [s.lower() for s in x]
+        # x = [s.split() for s in x]
+        x = self.abbr_transform(x)
+        x = self.punc_tokenizer(x)
+        x = self.num_tokenizer(x)
         # x = self.num_transcript(x)
         _LOG.debug("RESULTS: " + str(x))
 
     def transform(self, x):
         return self.encode(x)
+
+    def __call__(self, inp):
+        return self.transform(inp)
