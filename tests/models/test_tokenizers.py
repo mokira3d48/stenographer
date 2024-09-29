@@ -20,11 +20,11 @@ class PhoneticTokenizerTest(TestCase):
                                                    self.word_pron_fp,
                                                    self.phonemes_fp)
         text = """
-        L’idée remonte aux années 1950 avec John von Neumann et a été débattue
-        par I. J. Good, V. Vinge (4) ou  R. Kurzweil (5). On la retrouve
-        fréquemment dans la culture populaire avec 2001Odyssée de l’espace,
+        Au temps de guerre, l’idée remonte aux années 1950 avec John von Neumann et a été débattue
+        par I. J. Good, V. Vinge (x4) ou  R. Kurzweil (5). On la retrouve
+        fréquemment dans la culture populaire avec ci2001Odyssée de l’espace,
         Terminator, Minority Report, Matrix, et plus récemment Her ou encore
-        Transcendance.
+        Transcendance. Accent tonique.
         """
         tokenizer.encode([text])
         # _LOG.debug(str([''] * len(text.split())))

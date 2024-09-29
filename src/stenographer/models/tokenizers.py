@@ -4,7 +4,6 @@ import logging
 import json
 
 import nltk
-from joblib.externals.cloudpickle import instance
 from num2words import num2words
 
 
@@ -156,9 +155,7 @@ class _NumberTokenizer(_Transformer):
             pos_res = num_pos + wrd_pos
             pos_res = sorted(pos_res)
             for pos in pos_res:
-                _LOG.debug(str(pos))
                 out.append(wrd_res[pos])
-                _LOG.debug(str(pos) + " " + str(out[-1]))
 
         return out
 
@@ -197,7 +194,8 @@ class _Num2Text(_Transformer):
         result = x[:]
         # num_list = re.findall(self._PATTERN, x)
         for ind, num in enumerate(x):
-            if not re.findall(rf"[{self.numbers}]", num):
+            number_found = all(map((lambda c: c in self.numbers), num))
+            if not number_found:
                 continue
             if ',' in num:
                 num = num.replace(',', '.')  # eg: 3.1415 -> 3,1415
@@ -213,14 +211,14 @@ class _Num2Text(_Transformer):
         return result
 
 
-class _ExprPrononciation(_Transformer):
+class _ExprPronunciation(_Transformer):
     """
-    Transformation of expressions into their prononciation
+    Transformation of expressions into their pronunciation
     using IPA dictionary.
 
     :param ipa:
         The IPA dictionary that will be used
-        to transform text into prononciation.
+        to transform text into pronunciation.
     :type ipa: `dict`
     """
     def __init__(self, ipa):
@@ -230,26 +228,31 @@ class _ExprPrononciation(_Transformer):
     def transform(self, x):
         assert x is not None, (
             "The text which we want to transform"
-            "into prononciation is not defined.")
+            "into pronunciation is not defined.")
         pron_found = []
-        for expression, prononciation in self.ipa.items():
+        x_string = ' '.join(x)
+        for expression, pronunciation in self.ipa.items():
             pattern = rf"{expression}"
-            # print(pattern)
-            occurrences_found = re.match(pattern, x)
+            _LOG.debug(pattern)
+            # occurrences_found = re.match(pattern, x_string)
+            occurrences_found = pattern in x_string
+            _LOG.debug(str(occurrences_found))
             if not occurrences_found:
                 continue
-            x = x.replace(expression, prononciation)
-            pron_found.append(prononciation)
-        return x, pron_found
+            x_string = x_string.replace(expression, pronunciation)
+            pron_found.append(pronunciation)
+
+        out = x_string.split()
+        return out, pron_found
 
 
-class _WordPrononciation(_Transformer):
+class _WordPronunciation(_Transformer):
     """
-    Transformation of words into their prononciations using IPA dictionary.
+    Transformation of words into their pronunciation using IPA dictionary.
 
     :param ipa:
         The IPA dictionary that will be used
-        to transform text into prononciation.
+        to transform text into pronunciation.
     :type ipa: `dict`
     """
     def __init__(self, ipa):
@@ -259,7 +262,7 @@ class _WordPrononciation(_Transformer):
     def transform(self, x):
         assert x is not None, (
             "The text which we want to transform"
-            "into prononciation is not defined.")
+            "into pronunciation is not defined.")
         text_split = x.split()
         results = []
         for word in text_split:
@@ -282,9 +285,9 @@ class PhoneticTokenizer(_Transformer):
         Transcript the number contained in text
         into the letter text.
     :arg expr_transform:
-        Convert the expressions found into its prononciation.
+        Convert the expressions found into its pronunciation.
     :arg word_transform:
-        Convert the words found of text into its prononciation.
+        Convert the words found of text into its pronunciation.
 
     :type phonemes_vocab: `list`
     :type abbr_transform: `_Transformer`
@@ -325,9 +328,9 @@ class PhoneticTokenizer(_Transformer):
         :param abbr_dict:
             The JSON file path of the abbreviation dictionary.
         :param expr_pron_dict:
-            The JSON file path of expression prononciations dictionary.
+            The JSON file path of expression pronunciations dictionary.
         :param word_pron_dict:
-            The JSON file path of the word prononciations dictionary.
+            The JSON file path of the word pronunciations dictionary.
         :param phonemes_vocab:
             The JSON file path of the phoneme vocabularies.
 
@@ -350,8 +353,8 @@ class PhoneticTokenizer(_Transformer):
         # And then, we will load each json file path and instantiate
         # the corresponding transformer class.
         mapping = {abbr_dict:_Abbreviation,
-                   expr_pron_dict: _ExprPrononciation,
-                   word_pron_dict: _WordPrononciation}
+                   expr_pron_dict: _ExprPronunciation,
+                   word_pron_dict: _WordPronunciation}
         transformer_instances = []
         for file_path, transformer_class in mapping.items():
             dict_loaded = _read_json_file(file_path)
@@ -359,7 +362,7 @@ class PhoneticTokenizer(_Transformer):
             transformer_instances.append(instance)
         abbreviation, expr_transform, word_transform = transformer_instances
 
-        # Now, we will instantiate the reste of dependence:
+        # Now, we will instantiate the rest of dependence:
         punc_tokenizer = _PuncTokenization()
         num_tokenizer = _NumberTokenizer(list(_NUMBERS), list(_LETTERS))
         num_transform = _Num2Text(_NUMBERS, lang='fr')
@@ -371,6 +374,12 @@ class PhoneticTokenizer(_Transformer):
                            word_transform)
         return new_instance
 
+    def split(self, seq):
+        res = []
+        for elem in seq:
+            res.extend(elem.split())
+        return res
+
     def encode(self, x):
         assert x is not None, (
             "The text value which will be tokenized is not defined.")
@@ -379,7 +388,11 @@ class PhoneticTokenizer(_Transformer):
         x = self.abbr_transform(x)
         x = self.punc_tokenizer(x)
         x = self.num_tokenizer(x)
-        # x = self.num_transcript(x)
+        x = self.num_transcript(x)
+
+        x = [self.split(s) for s in x]
+        x = self.expr_transform(x)
+
         _LOG.debug("RESULTS: " + str(x))
 
     def transform(self, x):
