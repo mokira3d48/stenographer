@@ -233,10 +233,10 @@ class _ExprPronunciation(_Transformer):
         x_string = ' '.join(x)
         for expression, pronunciation in self.ipa.items():
             pattern = rf"{expression}"
-            _LOG.debug(pattern)
+            # _LOG.debug(pattern)
             # occurrences_found = re.match(pattern, x_string)
             occurrences_found = pattern in x_string
-            _LOG.debug(str(occurrences_found))
+            # _LOG.debug(str(occurrences_found))
             if not occurrences_found:
                 continue
             x_string = x_string.replace(expression, pronunciation)
@@ -263,10 +263,13 @@ class _WordPronunciation(_Transformer):
         assert x is not None, (
             "The text which we want to transform"
             "into pronunciation is not defined.")
-        text_split = x.split()
+        # text_split = x.split()
         results = []
-        for word in text_split:
-            pron = self.ipa.get(word, '')
+        for word in x:
+            if not word:
+                results.append(word)
+                continue
+            pron = self.ipa.get(word, word)
             results.append(pron)
         return results
 
@@ -349,14 +352,14 @@ class PhoneticTokenizer(_Transformer):
         phon_vocab = sorted(phon_list)
 
         # Given all instance that we need hase same constructor signature
-        # so, we mapp each class of the transformer with each json file path.
+        # so, we map each class of the transformer with each json file path.
         # And then, we will load each json file path and instantiate
         # the corresponding transformer class.
-        mapping = {abbr_dict:_Abbreviation,
-                   expr_pron_dict: _ExprPronunciation,
-                   word_pron_dict: _WordPronunciation}
+        mapping = [(abbr_dict, _Abbreviation),
+                   (expr_pron_dict, _ExprPronunciation),
+                   (word_pron_dict, _WordPronunciation)]
         transformer_instances = []
-        for file_path, transformer_class in mapping.items():
+        for file_path, transformer_class in mapping:
             dict_loaded = _read_json_file(file_path)
             instance = transformer_class(dict_loaded)
             transformer_instances.append(instance)
@@ -374,11 +377,29 @@ class PhoneticTokenizer(_Transformer):
                            word_transform)
         return new_instance
 
-    def split(self, seq):
+    @staticmethod
+    def _split(seq):
         res = []
         for elem in seq:
             res.extend(elem.split())
         return res
+
+    @staticmethod
+    def _set_to_blank(seq, words):
+        res = seq[:]
+        ret = {}
+        for i, w in enumerate(seq):
+            if w not in words:
+                continue
+            res[i] = ''
+            ret[w] = i
+        return res, ret
+
+    @staticmethod
+    def _fill(seq, word):
+        for w, i in word.items():
+            seq[i] = w
+        return seq
 
     def encode(self, x):
         assert x is not None, (
@@ -390,10 +411,20 @@ class PhoneticTokenizer(_Transformer):
         x = self.num_tokenizer(x)
         x = self.num_transcript(x)
 
-        x = [self.split(s) for s in x]
+        x = [self._split(s) for s in x]
         x = self.expr_transform(x)
 
+        x_cpy = []
+        r_dict = []
+        for s, pho in x:
+            s_, r_ = self._set_to_blank(s, pho)
+            x_cpy.append(s_)
+            r_dict.append(r_)
+        x_cpy = self.word_transform(x_cpy)
+        x = [self._fill(s, r_) for s, r_ in zip(x_cpy, r_dict)]
+
         _LOG.debug("RESULTS: " + str(x))
+        return x
 
     def transform(self, x):
         return self.encode(x)
